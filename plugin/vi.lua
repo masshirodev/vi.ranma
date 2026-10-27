@@ -27,8 +27,10 @@
 -- "pane.alt_screen"), which works over ssh), else by name. REPLs and a few
 -- others are excepted by name too; add more to `vi.except`.
 --
--- Each pane keeps its own state (in pane.vars), so typing in one leaves the
--- others in NORMAL.
+-- NORMAL or INSERT is one state for every pane and workspace (vi.state
+-- "shared"), or each pane's own ("pane"). Keys NORMAL does not bind that
+-- are not letters (alt+f, ctrl+r, the arrows) reach the program, on a ranma
+-- with a mode's `pass`. Leaving copy mode (v) comes back to NORMAL.
 --
 -- ranma's plugin API: https://github.com/masshirodev/ranma/blob/main/doc/CONFIG.md
 -- ("User modes", "Pane handles", "Hooks", "Options").
@@ -44,6 +46,12 @@ ranma.option("vi.clipboard", {
   name = "Yank to the clipboard",
   desc = "What y, d, c, x and s take also goes to the clipboard (OSC 52, over ssh too). "
     .. "Off, it stays in vi's own register for p and P.",
+})
+ranma.option("vi.state", {
+  type = "enum", choices = { "shared", "pane" }, default = "shared",
+  name = "State",
+  desc = "shared: one NORMAL or INSERT for every pane and workspace, so moving the focus "
+    .. "keeps the mode you are in. pane: each pane remembers its own.",
 })
 ranma.option("vi.undo", {
   type = "string", default = "ctrl+_",
@@ -124,22 +132,42 @@ local function take_count()
   return math.min(n, 999)
 end
 
+-- INSERT or not: one flag for every pane (vi.state "shared"), or each
+-- pane's own in pane.vars ("pane").
+local shared_insert = false
+local function per_pane()
+  return ranma.get("vi.state") == "pane"
+end
+local function inserting(p)
+  if per_pane() then
+    return p ~= nil and p.vars.insert == true
+  end
+  return shared_insert
+end
+local function set_inserting(p, on)
+  if per_pane() then
+    if p then
+      p.vars.insert = on
+    end
+  else
+    shared_insert = on
+  end
+end
+
 local function normal(p)
   reset()
-  if p then
-    p.vars.insert = false
-  end
-  -- Entering it again would be a mode_change for every motion.
-  if current ~= "vi" then
+  set_inserting(p, false)
+  -- Entering it again would be a mode_change for every motion. But the name
+  -- heard last is not trusted alone: a ranma before mode.pass left copy
+  -- mode without a word, and NORMAL had to come back all the same.
+  if current ~= "vi" or ranma.state().mode ~= "wm" then
     ranma.action("mode vi")
   end
 end
 
 local function insert(p)
   reset()
-  if p then
-    p.vars.insert = true
-  end
+  set_inserting(p, true)
   ranma.action("exit_mode")
 end
 
@@ -563,10 +591,16 @@ local function motion_binds(binds)
 end
 
 local CURSOR_SHAPE = has("mode.cursor")
-local function mode(name, label, cursor, binds)
+local PASS = has("mode.pass")
+-- pass: NORMAL lets the program have the keys it does not bind that a
+-- letter is not (alt+f, ctrl+r, the arrows); the others swallow them.
+local function mode(name, label, cursor, binds, pass)
   local def = { label = label, hint = false, binds = binds }
   if CURSOR_SHAPE then
     def.cursor = cursor
+  end
+  if PASS and pass then
+    def.pass = "modified"
   end
   ranma.mode(name, def)
 end
@@ -710,7 +744,7 @@ local normal_binds = motion_binds({
     desc = "run, insert",
   },
 })
-mode("vi", "NORMAL", "block", normal_binds)
+mode("vi", "NORMAL", "block", normal_binds, true)
 
 -- An operator waiting for its motion: d c y, then the same key again for the
 -- whole line (dd cc yy). Esc gives up.
@@ -773,8 +807,17 @@ ranma.bind("escape", function()
   end
 end, { global = true, desc = "normal mode" })
 
+-- Where the focused pane's mode should be; defined below.
+local settle
+
 ranma.on("mode_change", function(e)
+  local was = current
   current = e.mode
+  -- Copy mode (v) ended, by Esc or a yank: back to NORMAL, as vim's visual
+  -- mode ends in normal mode.
+  if was == "copy" and current == "normal" then
+    settle(ranma.pane())
+  end
   if not in_vi(current) then
     reset()
     reading = nil
@@ -783,14 +826,13 @@ end)
 
 -- Focus lands in the pane's own state: NORMAL unless it was left in INSERT.
 -- Not in the middle of WM mode, which a focus bind may still be in.
-local function settle(p)
-  if current == "wm" then
+settle = function(p)
+  -- Not in the middle of WM mode or copy mode, which have the keyboard.
+  if current == "wm" or current == "copy" then
     return
   end
-  if modal(p) and not p.vars.insert then
-    if current ~= "vi" then
-      normal(p)
-    end
+  if modal(p) and not inserting(p) then
+    normal(p)
   elseif in_vi(current) then
     reset()
     ranma.action("exit_mode")

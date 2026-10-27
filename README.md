@@ -37,7 +37,10 @@ Full-screen programs (editors, pagers, htop, fzf, a ranma) are left alone:
 told by the alternate screen where the server has it, which works over
 ssh, else by name. REPLs and a few others are excepted by name too.
 
-Each pane keeps its own state, so typing in one leaves the others in NORMAL.
+NORMAL or INSERT is one state for every pane and workspace (vi.state
+"shared"), or each pane's own ("pane"). Keys NORMAL does not bind that
+are not letters (alt+f, ctrl+r, the arrows) reach the program, on a ranma
+with a mode's `pass`. Leaving copy mode (v) comes back to NORMAL.
 ```
 
 The bar's `mode` module says `NORMAL`, and `DELETE`, `CHANGE`, `YANK` or `CHAR` while an operator or a find waits for its next key; the cursor is a block in NORMAL and underlined while it waits.
@@ -75,11 +78,12 @@ In NORMAL. A count before a motion or an operator repeats it (`3w`, `d2w`, `2dfx
 | `~` | Toggle the case of the character and move on. |
 | `p` `P` | Paste what was yanked (or deleted) after or at the cursor. |
 | `u` | The line editor's undo (`vi.undo`). A deletion vi made of several keys may take several `u` in zsh, which undoes key by key. |
-| `v` | Copy mode at the cursor, to select with vi keys; its yank fills `p` too. |
+| `v` | Copy mode at the cursor, to select with vi keys; its yank fills `p` too. Esc or the yank comes back to NORMAL. |
 | `/` | Search the history (`ctrl+r`) in INSERT. |
 | `⏎` | Run the line and go to INSERT. |
 | `esc` | Send Esc to the program. |
 | `alt+h/j/k/l` | Move the focus between panes. |
+| anything else with Ctrl or Alt, arrows, Tab, Home, End | The program's, as in INSERT (`alt+f`, `ctrl+r`, `ctrl+a`): NORMAL lays its keys over the program's rather than taking them all. Plain letters NORMAL does not bind do nothing. Needs a ranma with `ranma.has("mode.pass")`; on an older one they are swallowed. |
 
 Everywhere else: `esc` goes to NORMAL in a pane that is not left alone, and is sent on in one that is. `ranma.unbind("escape")` in `init.lua` takes that over again.
 
@@ -89,6 +93,7 @@ In ranma's settings panel under `vi`, or with hako's `opts` (`{ "masshirodev/vi.
 
 | Option | Default | |
 | --- | --- | --- |
+| `vi.state` | `"shared"` | `shared`: one NORMAL or INSERT for every pane and workspace, so moving the focus keeps the mode you are in. `pane`: each pane remembers its own. |
 | `vi.except` | `""` | Programs to leave alone, separated by spaces, on top of the built-in list. |
 | `vi.clipboard` | `true` | What `y`, `d`, `c`, `x` and `s` take also goes to the clipboard (OSC 52, over ssh too). Off, it stays in vi's own register for `p` and `P`. |
 | `vi.undo` | `"ctrl+_"` | The key `u` sends. |
